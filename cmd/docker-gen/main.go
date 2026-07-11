@@ -22,6 +22,7 @@ type stringslice []string
 type mapstringslice map[string][]string
 
 var (
+	watchPaths            stringslice = make(stringslice, 0)
 	buildVersion          string
 	version               bool
 	watch                 bool
@@ -102,6 +103,7 @@ func loadConfig(file string) error {
 }
 
 func initFlags() {
+	flag.Var(&watchPaths, "watch-path", "watch file/directory for changes. You can pass this option multiple times to watch multiple paths.")
 	certPath := filepath.Join(os.Getenv("DOCKER_CERT_PATH"))
 	if certPath == "" {
 		certPath = filepath.Join(os.Getenv("HOME"), ".docker")
@@ -196,6 +198,7 @@ func main() {
 			log.Fatalf("Error parsing wait interval: %s\n", err)
 		}
 		cfg := config.Config{
+			WatchPaths:       watchPaths,
 			Template:         flag.Arg(0),
 			Dest:             flag.Arg(1),
 			Watch:            watch,
