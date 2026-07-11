@@ -7,6 +7,7 @@ import (
 )
 
 type Config struct {
+	WatchPaths             []string
 	Template               string
 	Dest                   string
 	Watch                  bool

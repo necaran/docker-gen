@@ -1,6 +1,8 @@
 package generator
 
 import (
+	"path/filepath"
+	"github.com/fsnotify/fsnotify"
 	"fmt"
 	"log"
 	"os"
@@ -191,6 +193,18 @@ func (g *generator) generateFromEvents() {
 	client := g.Client
 	var watchers []chan *docker.APIEvents
 
+	var fsWatchers []*fsnotify.Watcher
+	realPath := func(path string) string {
+		tgt, err := filepath.EvalSymlinks(path)
+		if err != nil { tgt = path }
+		abs, err := filepath.Abs(tgt)
+		if err != nil { abs = tgt }
+		return abs
+	}
+	isSamePath := func(a, b string) bool {
+		return realPath(a) == realPath(b)
+	}
+
 	for _, cfg := range configs.Config {
 
 		if !cfg.Watch {
@@ -218,6 +232,79 @@ func (g *generator) generateFromEvents() {
 				g.runNotifyCmd(cfg)
 				g.sendSignalToContainers(cfg)
 				g.sendSignalToFilteredContainers(cfg)
+			}
+		}(cfg)
+
+		// Watch file/directory paths
+		if len(cfg.WatchPaths) == 0 {
+			continue
+		}
+
+		fsWatcher, err := fsnotify.NewWatcher()
+		if err != nil {
+			log.Printf("Error creating file watcher: %s", err)
+			return
+		}
+
+		// Add all watch paths
+		for _, path := range cfg.WatchPaths {
+			if err := fsWatcher.Add(path); err != nil {
+				log.Printf("Error watching path %s: %s", path, err)
+				continue
+			}
+			log.Printf("Watching path: %s", path)
+		}
+		if len(fsWatcher.WatchList()) == 0 {
+			fsWatcher.Close()
+			continue
+		}
+
+		fsWatchers = append(fsWatchers, fsWatcher)
+
+		g.wg.Add(1)
+		go func(cfg config.Config) {
+			defer g.wg.Done()
+
+			defer fsWatcher.Close()
+
+			// Debounce rapid changes
+			var debouncer *time.Timer
+			for {
+				select {
+				case event, ok := <-fsWatcher.Events:
+					if !ok {
+						return
+					}
+
+					// Skip event about Dest
+					if isSamePath(cfg.Dest, event.Name) {
+						// log.Printf("Skip path event: %s %s", event.Name, event.Op)
+						continue
+					}
+
+					if debouncer != nil && debouncer.Stop() {
+						log.Printf("Debounce path event")
+					}
+					log.Printf("Path event: %s %s", event.Name, event.Op)
+
+					debouncer = time.AfterFunc(500 * time.Millisecond, func() {
+						containers, err := g.getContainers(cfg)
+						if err != nil {
+							log.Printf("Error listing containers: %s\n", err)
+							return
+						}
+						template.GenerateFile(cfg, containers)
+						g.runNotifyCmd(cfg)
+						g.sendSignalToContainers(cfg)
+						g.sendSignalToFilteredContainers(cfg)
+					})
+
+				case err, ok := <-fsWatcher.Errors:
+					if !ok {
+						return
+					}
+					log.Printf("File watcher error: %s", err)
+				}
 			}
 		}(cfg)
 	}
@@ -313,6 +400,9 @@ func (g *generator) generateFromEvents() {
 						// close all watchers and exit
 						for _, watcher := range watchers {
 							close(watcher)
+						}
+						for _, fsWatcher := range fsWatchers {
+							fsWatcher.Close()
 						}
 						return
 					}

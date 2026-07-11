@@ -165,6 +165,9 @@ Options:
       minimum and maximum durations to wait (e.g. "500ms:2s") before triggering generate
   -watch
       watch for container changes
+  -watch-path string
+      watch file/directory for changes.
+      You can pass this option multiple times to watch multiple paths.
 
 Arguments:
   template - path to a template to generate
